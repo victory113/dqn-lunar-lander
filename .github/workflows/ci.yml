@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch keeps the CI image small; nothing here needs a GPU.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pytest pytest-cov ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Unit tests
+        run: pytest tests/ -v --cov=dqn --cov-report=term-missing
+
+  smoke:
+    # Proves the training loop actually runs end to end against the real
+    # environment. Two episodes is enough to catch an import error, a shape
+    # mismatch, or a broken artifact write — none of which the unit tests see.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          sudo apt-get update && sudo apt-get install -y swig
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Two-episode training smoke test
+        run: python train.py --episodes 2 --out runs/ci
+
+      - name: Evaluate the checkpoint it produced
+        run: python evaluate.py --checkpoint runs/ci/dqn_lunarlander.pth --episodes 3
+
+      - name: Confirm every artifact was written
+        run: |
+          test -f runs/ci/dqn_lunarlander.pth
+          test -f runs/ci/training_curve.png
+          test -f runs/ci/training_summary.json
+          test -f runs/ci/training_history.npz
+          test -f runs/ci/evaluation.json

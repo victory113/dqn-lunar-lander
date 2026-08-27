@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Run artifacts. Keep one curated run under assets/ and let the rest stay local.
+runs/
+*.pth
+*.npz
+videos/
+*.mp4
+
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/
