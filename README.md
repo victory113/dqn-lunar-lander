@@ -7,25 +7,37 @@ A Double Deep Q-Network trained from scratch in PyTorch to land the Gymnasium `L
 ![Gymnasium](https://img.shields.io/badge/Gymnasium-1.1-0081A5?style=flat)
 ![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?style=flat)
 
-<!-- TODO: after a run, uncomment and commit the figure
-![Training curve](assets/training_curve.png)
--->
+![Vanilla DQN, seed 44: episode score climbing past the solved threshold at episode 523, with training loss settling to 0.5 as epsilon decays](assets/training_vanilla_seed44.png)
+
+*Vanilla DQN, seed 44 — solved at episode 523. Loss settles to ~0.5 and stays there.*
+
+![Double DQN, seed 42: score climbing to +80 by episode 440 then collapsing to -550, while training loss stays flat near 2 for 440 episodes and then rises to 25](assets/training_double_seed42.png)
+
+*Double DQN, seed 42 — the same configuration, diverging. The score falls off a cliff at episode 440 and the loss leaves the range it held for the previous 400 episodes at exactly the same moment. Both panels are showing one event.*
 
 ---
 
 ## Results
 
-<!-- TODO: fill from runs/experiments/comparison.json and runs/baseline.json -->
-
-Averaged over 3 seeds (42, 43, 44), evaluated greedily on 100 seeded episodes each:
+Averaged over 3 seeds (42, 43, 44) at 700 episodes each, evaluated greedily on 100 seeded episodes:
 
 | Policy | Eval mean ± std | Seeds solved | Median episode to solve |
 |---|---|---|---|
-| Double DQN | `TODO` | `TODO` / 3 | `TODO` |
-| Vanilla DQN | `TODO` | `TODO` / 3 | `TODO` |
-| Random baseline | `TODO` | 0 / 3 | — |
+| **Vanilla DQN** | **272.4 ± 1.4** | **3 / 3** | 523 |
+| Double DQN | −453.8 ± 471.6 | 1 / 3 | 577 |
+| Random baseline | −177.6 ± 112.5 | 0 / 3 | — |
 
-The environment counts as solved at a 100-episode average of **200**. A random policy scores around −180, so the baseline row is what "no learning at all" looks like on identical starting conditions.
+The environment counts as solved at a 100-episode average of **200**. The random policy scores −177.6, so that row is what "no learning at all" looks like on identical starting conditions.
+
+**Double DQN lost, and it lost badly.** That is the opposite of what I expected when I added it, so the per-seed numbers matter more than the aggregate:
+
+| Seed | Vanilla DQN | Double DQN |
+|---|---|---|
+| 42 | 270.5 — 91% of episodes solved | −554.8 — 0% |
+| 43 | 273.2 — 97% | −974.2 — 0% |
+| 44 | 273.6 — 96% | 167.6 — 51% |
+
+Vanilla is not just better on average, it is *stable*: three independent seeds land within 3.1 points of each other. Double DQN is bimodal — one seed solved the environment, two diverged outright. [What the ablation actually found](#what-the-ablation-actually-found) has the loss curves and what I think is behind it.
 
 Every number traces to a JSON file written by the run that produced it: `runs/experiments/comparison.json`, `runs/baseline.json`. No figure in this README was typed by hand.
 
@@ -93,9 +105,34 @@ next_actions = policy_net(next_states).argmax(dim=1, keepdim=True)
 q_next = target_net(next_states).gather(1, next_actions).squeeze(1)
 ```
 
-Because the two networks' errors are not perfectly correlated, a spuriously high estimate in one is unlikely to be echoed by the other, and most of the overestimation cancels. It is roughly three lines of code, and it is the single highest-value change to a vanilla DQN.
+Because the two networks' errors are not perfectly correlated, a spuriously high estimate in one is unlikely to be echoed by the other, and most of the overestimation cancels. It is roughly three lines of code, and it is the change most widely recommended for a vanilla DQN. That recommendation did not reproduce here — see below.
 
 Toggle with `Config.double_dqn`; `python experiments.py --ablate` trains both arms under identical seeds so the Bellman target is the only difference between them.
+
+### What the ablation actually found
+
+It did not hold here. Vanilla scored **272.4 ± 1.4** and solved 3/3; Double scored **−453.8 ± 471.6** and solved 1/3.
+
+The loss curves say what happened. Both failing Double runs learned normally at first — seed 42 reached a +53 running average by episode 400 — and then came apart:
+
+```
+double_dqn seed 42    loss   1.34   2.58   1.72   1.30    3.78    8.94   17.59   23.36
+                      avg  100  -121    -32    +30    +54    -173    -469    -545    -550
+
+vanilla    seed 42    loss   1.42   2.58   1.14   0.66    0.55    0.61    0.54    0.61
+                      avg  100  -121    -26    +80   +107    +218    +242    +226    +198
+```
+
+A loss growing without bound while the score collapses is Q-value divergence: the value estimates run away, the policy follows them, and the lander ends up flying off firing engines — which is where the −5,000 episode scores come from. Double DQN did not fail to learn. It learned, then diverged.
+
+I could not find a defect behind it. The implementation matches the standard formulation — policy net selects, target net evaluates, under `no_grad`, with the terminal bootstrap zeroed — and the suite covers exactly that: Double against vanilla target selection, and the one-sided overestimation gap between them. All 42 tests pass.
+
+Two candidate explanations, neither of which this experiment settles:
+
+- **Seed luck.** Three seeds split 2 diverged / 1 solved. Five more might tell a different story, and running seeds 45–47 on the Double arm is the first thing I would do next.
+- **Interaction with the soft target update.** τ = 0.005 after every gradient step keeps the target network close to the policy network. Double DQN's benefit depends on the two networks' errors being *uncorrelated*; a target that closely tracks the policy net weakens precisely that, leaving the cost without the benefit. A periodic hard update, or a smaller τ, would test it directly.
+
+What I have not done is quietly drop the arm and report the result I expected. The claim above is the textbook one and it is well supported in the literature. It did not reproduce on this configuration, at this episode budget, on these three seeds. That is the result.
 
 ## Running it
 
@@ -192,6 +229,7 @@ The assignment was a single Colab notebook that trained an agent and printed som
 - **Seeded the evaluation episodes.** The original evaluated on 10 unseeded episodes, sampling different starting conditions every run, so the reported average moved each time it was run. Evaluation now uses 100 episodes seeded from a fixed offset, disjoint from the training seeds.
 - **Removed `TARGET_UPDATE_FREQ`**, a hyperparameter defined but never read. The code always soft-updated after every gradient step; leaving the constant in implied a periodic hard update that was not happening.
 - **Config and metrics serialise to JSON on every run**, so any number quoted anywhere traces back to the run that produced it.
+- **Seeded the baseline's *policy*, not just its episodes.** This one was mine, not the notebook's, and it is the same bug as the one two entries above. `baseline.py` called `random.seed()` and reset each episode from a fixed offset, so the 100 starting positions were identical every run — but actions came from `env.action_space.sample()`, and a Gymnasium `Space` carries its own generator that `reset(seed=…)` does not touch. Starting conditions were pinned; the policy was not. It surfaced only because two people ran the same command and compared: −179.0 against −187.0. One line (`env.action_space.seed(seed)`) fixes it, and the baseline now returns −177.6 ± 112.5 on every run. Half-seeded is indistinguishable from seeded until someone checks.
 
 **Rigour**
 - **Double DQN**, with the vanilla path retained behind a flag so the two can be compared directly.
@@ -207,6 +245,6 @@ The assignment was a single Colab notebook that trained an agent and printed som
 ## Limitations and next steps
 
 - **No prioritised replay or dueling heads.** Prioritised experience replay is the natural next addition: sampling transitions in proportion to TD error concentrates learning on the surprising ones. Dueling architectures would help most in states where the action choice barely matters.
-- **Three seeds is thin.** Five to ten would be a properly defensible benchmark. Three is what fits in a reasonable CPU budget.
+- **Three seeds is thin, and it is the limitation that most affects the headline result.** Five to ten would be a properly defensible benchmark; three is what fits in a reasonable CPU budget. It matters more than usual here because the Double arm split 2 diverged / 1 solved — a ratio three samples cannot pin down. The vanilla arm is on firmer ground: 270.5, 273.2 and 273.6 across independent seeds is a tight enough spread to trust.
 - **ε never reaches its floor.** At 0.995 decay over 700 episodes, ε bottoms out near 0.03 rather than the configured 0.01. Not a bug, but the floor never engages at this episode count, and it is asserted as a known property in `test_epsilon_floor_is_actually_reached_within_the_run`.
-- **No hyperparameter search.** The values are the assignment defaults, which work; they are not claimed to be optimal.
+- **No hyperparameter search.** The values are the assignment defaults. They work well for vanilla DQN here and are not claimed to be optimal — and since the Double DQN divergence may itself be a hyperparameter interaction (see the τ hypothesis above), "these settings" is doing real work in every claim on this page.
