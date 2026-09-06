@@ -25,6 +25,7 @@ from evaluate import EVAL_SEED_OFFSET
 def run_baseline(episodes: int = 100, seed: int = 42, out: Path | None = None) -> dict:
     random.seed(seed)
     env = gym.make(DEFAULT_CONFIG.env_id)
+    env.action_space.seed(seed)  # sample() has its own RNG; reset(seed=) does not cover it
 
     scores: list[float] = []
     for episode in range(episodes):
