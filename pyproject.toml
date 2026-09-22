@@ -21,6 +21,11 @@ ignore = [
 "tests/*" = ["SLF001"]
 "notebooks/*" = ["ALL"]
 
+[tool.ruff.format]
+# The formatter has its own settings: without this it would rewrite the
+# original notebook that the lint rule above deliberately leaves verbatim.
+exclude = ["notebooks/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
